@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Kinveil/Riot-API-Golang/apiclient/ratelimiter"
-	"github.com/Kinveil/Riot-API-Golang/constants/region"
+	"github.com/junioryono/Riot-API-Golang/apiclient/ratelimiter"
+	"github.com/junioryono/Riot-API-Golang/constants/region"
 )
 
 type Summoner struct {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Kinveil/Riot-API-Golang/apiclient/limiter"
+	"github.com/junioryono/Riot-API-Golang/apiclient/limiter"
 )
 
 type APIRequest struct {

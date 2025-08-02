@@ -1,4 +1,4 @@
-[![Automated Version Tagging](https://github.com/Kinveil/Riot-API-Golang/actions/workflows/tagging.yml/badge.svg)](https://github.com/Kinveil/Riot-API-Golang/actions/workflows/tagging.yml)
+[![Automated Version Tagging](https://github.com/junioryono/Riot-API-Golang/actions/workflows/tagging.yml/badge.svg)](https://github.com/junioryono/Riot-API-Golang/actions/workflows/tagging.yml)
 
 # ⚡️ Riot-API-Golang
 
@@ -15,7 +15,7 @@ The Riot-API-Golang provides a simplified interface to access Riot Games and Dat
 ## Installation
 
 ```bash
-go get github.com/Kinveil/Riot-API-Golang
+go get github.com/junioryono/Riot-API-Golang
 ```
 
 ## Example Usage (Riot API)
@@ -151,4 +151,4 @@ Riot-API-Golang is licensed under the MIT license. See the [LICENSE](LICENSE) fi
 
 ## Support
 
-If you encounter any issues or have questions, please file an issue on the [GitHub issues page](https://github.com/Kinveil/Riot-API-Golang/issues).
+If you encounter any issues or have questions, please file an issue on the [GitHub issues page](https://github.com/junioryono/Riot-API-Golang/issues).

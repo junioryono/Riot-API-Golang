@@ -46,4 +46,4 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git tag $NEW_VERSION
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Kinveil/Riot-API-Golang.git $NEW_VERSION
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/junioryono/Riot-API-Golang.git $NEW_VERSION

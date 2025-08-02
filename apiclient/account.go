@@ -3,8 +3,8 @@ package apiclient
 import (
 	"fmt"
 
-	"github.com/Kinveil/Riot-API-Golang/apiclient/ratelimiter"
-	"github.com/Kinveil/Riot-API-Golang/constants/continent"
+	"github.com/junioryono/Riot-API-Golang/apiclient/ratelimiter"
+	"github.com/junioryono/Riot-API-Golang/constants/continent"
 )
 
 type Account struct {

@@ -15,7 +15,7 @@ Clone your fork locally and configure the remote repository:
 ```bash
 git clone https://github.com/yourusername/Riot-API-Golang.git
 cd Riot-API-Golang
-git remote add upstream https://github.com/Kinveil/Riot-API-Golang.git
+git remote add upstream https://github.com/junioryono/Riot-API-Golang.git
 ```
 
 ### Create a Branch

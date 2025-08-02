@@ -1,4 +1,4 @@
-module github.com/Kinveil/Riot-API-Golang
+module github.com/junioryono/Riot-API-Golang
 
 go 1.19
 

@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Kinveil/Riot-API-Golang/apiclient/ratelimiter"
-	"github.com/Kinveil/Riot-API-Golang/constants/continent"
-	"github.com/Kinveil/Riot-API-Golang/constants/league/rank"
-	"github.com/Kinveil/Riot-API-Golang/constants/league/tier"
-	"github.com/Kinveil/Riot-API-Golang/constants/queue_ranked"
-	"github.com/Kinveil/Riot-API-Golang/constants/region"
+	"github.com/junioryono/Riot-API-Golang/apiclient/ratelimiter"
+	"github.com/junioryono/Riot-API-Golang/constants/continent"
+	"github.com/junioryono/Riot-API-Golang/constants/league/rank"
+	"github.com/junioryono/Riot-API-Golang/constants/league/tier"
+	"github.com/junioryono/Riot-API-Golang/constants/queue_ranked"
+	"github.com/junioryono/Riot-API-Golang/constants/region"
 	"github.com/barkimedes/go-deepcopy"
 )
 

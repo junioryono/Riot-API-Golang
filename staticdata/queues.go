@@ -3,9 +3,9 @@ package staticdata
 import (
 	"fmt"
 
-	"github.com/Kinveil/Riot-API-Golang/constants/language"
-	"github.com/Kinveil/Riot-API-Golang/constants/patch"
-	"github.com/Kinveil/Riot-API-Golang/constants/queue"
+	"github.com/junioryono/Riot-API-Golang/constants/language"
+	"github.com/junioryono/Riot-API-Golang/constants/patch"
+	"github.com/junioryono/Riot-API-Golang/constants/queue"
 )
 
 type Queues []Queue

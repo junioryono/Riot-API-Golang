@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Kinveil/Riot-API-Golang/apiclient/limiter"
+	"github.com/junioryono/Riot-API-Golang/apiclient/limiter"
 )
 
 const initialLimit = 20

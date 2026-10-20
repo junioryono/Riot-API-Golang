@@ -54,12 +54,10 @@ func TestConcurrentMethodLimiters(t *testing.T) {
 }
 
 func TestSetCapacity(t *testing.T) {
-	limiter := newRateLimit()
-	limiter.shortLimiter.SetCapacity(500000)
-	limiter.longLimiter.SetCapacity(500000)
+	limit := newRateLimit()
+	limit.setCapacities(500000, 500000)
 
-	assert.Equal(t, 500000, limiter.shortLimiter.Capacity())
-	assert.Equal(t, 500000, limiter.longLimiter.Capacity())
+	assert.Equal(t, []int{500000, 500000}, limit.capacities())
 }
 
 func TestConcurrentRegionAndMethodLimiters(t *testing.T) {
@@ -74,12 +72,11 @@ func TestConcurrentRegionAndMethodLimiters(t *testing.T) {
 
 	for _, region := range regions {
 		regionLimiter := rl.getRegionLimiter(region)
-		regionLimiter.shortLimiter.SetCapacity(5)
-		regionLimiter.longLimiter.SetCapacity(300)
+		regionLimiter.setCapacities(5, 300)
 
 		for _, method := range methods {
 			methodLimiter := rl.getMethodLimiter(region + method)
-			methodLimiter.shortLimiter.SetCapacity(20)
+			methodLimiter.setCapacities(20)
 		}
 	}
 
@@ -116,12 +113,11 @@ func TestConcurrentOneRegionAndTwoMethodsLimiters(t *testing.T) {
 
 	for _, region := range regions {
 		regionLimiter := rl.getRegionLimiter(region)
-		regionLimiter.shortLimiter.SetCapacity(1)
-		regionLimiter.longLimiter.SetCapacity(1)
+		regionLimiter.setCapacities(1, 1)
 
 		for _, method := range methods {
 			methodLimiter := rl.getMethodLimiter(region + method)
-			methodLimiter.shortLimiter.SetCapacity(1)
+			methodLimiter.setCapacities(1)
 		}
 	}
 
@@ -161,12 +157,11 @@ func TestConcurrentTwoRegionsAndOneMethodLimiters(t *testing.T) {
 
 	for _, region := range regions {
 		regionLimiter := rl.getRegionLimiter(region)
-		regionLimiter.shortLimiter.SetCapacity(1)
-		regionLimiter.longLimiter.SetCapacity(1)
+		regionLimiter.setCapacities(1, 1)
 
 		for _, method := range methods {
 			methodLimiter := rl.getMethodLimiter(region + method)
-			methodLimiter.shortLimiter.SetCapacity(1)
+			methodLimiter.setCapacities(1)
 		}
 	}
 

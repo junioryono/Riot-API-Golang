@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/junioryono/Riot-API-Golang/apiclient/limiter"
@@ -20,11 +20,21 @@ type APIRequest struct {
 	Response chan<- *http.Response
 	Error    chan<- error
 	Retries  int
+
+	// heldRegion and heldMethod are the buckets this request took tokens from.
+	// Retries reuse them instead of taking another token per attempt.
+	heldRegion []*limiter.Limiter
+	heldMethod []*limiter.Limiter
 }
 
+// RateLimit is one app or method limiter. Each header bucket has its own
+// token bucket and release window. active is how many of those buckets
+// currently match the last valid header.
 type RateLimit struct {
-	shortLimiter      *limiter.Limiter
-	longLimiter       *limiter.Limiter
+	mu                sync.Mutex
+	buckets           []*limiter.Limiter
+	windows           []time.Duration
+	active            int
 	blockedUntil      time.Time
 	blockedUntilQueue chan struct{}
 }
@@ -33,23 +43,35 @@ func (rl *RateLimiter) handleRequest(req *APIRequest) {
 	regionLimiter := rl.getRegionLimiter(req.Region)
 	methodLimiter := rl.getMethodLimiter(req.Region + req.MethodID.String())
 
-	isRetryRequest := req.Retries > 0
-	if err := rl.waitForLimiters(req.Context, req.Priority, regionLimiter, methodLimiter, isRetryRequest); err != nil {
+	if err := rl.waitForLimiterBlocks(req.Context, regionLimiter, methodLimiter); err != nil {
 		req.Error <- err
 		return
+	}
+
+	// A retry keeps the tokens taken on the first attempt.
+	if req.Retries == 0 {
+		heldRegion, heldMethod, err := rl.obtainBuckets(req.Context, req.Priority, regionLimiter, methodLimiter)
+		if err != nil {
+			req.Error <- err
+			return
+		}
+		req.heldRegion = heldRegion
+		req.heldMethod = heldMethod
 	}
 
 	httpRequest, err := rl.createHTTPRequest(req)
 	if err != nil {
 		req.Error <- err
-		rl.releaseLimiters(regionLimiter, methodLimiter)
+		releaseNow(req.heldRegion)
+		releaseNow(req.heldMethod)
 		return
 	}
 
 	resp, err := rl.httpClient.Do(httpRequest)
 	if err != nil {
 		req.Error <- err
-		rl.releaseLimiters(regionLimiter, methodLimiter)
+		releaseNow(req.heldRegion)
+		releaseNow(req.heldMethod)
 		return
 	}
 
@@ -79,13 +101,13 @@ func (rl *RateLimiter) createHTTPRequest(req *APIRequest) (*http.Request, error)
 func (rl *RateLimiter) handleHTTPResponse(req *APIRequest, resp *http.Response, regionLimiter, methodLimiter *RateLimit) {
 	if resp.StatusCode == http.StatusOK {
 		req.Response <- resp
-		rl.updateRateLimits(resp, req.MethodID, regionLimiter, methodLimiter)
+		rl.updateRateLimits(resp, req.MethodID, regionLimiter, methodLimiter, req.heldRegion, req.heldMethod)
 		return
 	}
 
 	if resp.StatusCode == http.StatusForbidden {
 		req.Response <- resp
-		rl.releaseLimitersAfterDelay(regionLimiter, methodLimiter, 15*time.Second)
+		go releaseAllAfterDelay(15*time.Second, req.heldRegion, req.heldMethod)
 		return
 	}
 
@@ -93,13 +115,13 @@ func (rl *RateLimiter) handleHTTPResponse(req *APIRequest, resp *http.Response, 
 		// Retry the request if Retries is less than maxRetries, or if maxRetries is -1. Otherwise, send the response to the channel
 		if req.Retries < rl.maxRetries || rl.maxRetries == -1 {
 			resp.Body.Close()
-			rl.handleRateLimitedResponse(resp, regionLimiter, methodLimiter, true)
+			rl.handleRateLimitedResponse(req, resp, regionLimiter, methodLimiter, true)
 
 			req.Retries++
 			go rl.handleRequest(req)
 		} else {
 			req.Response <- resp
-			rl.handleRateLimitedResponse(resp, regionLimiter, methodLimiter, false)
+			rl.handleRateLimitedResponse(req, resp, regionLimiter, methodLimiter, false)
 		}
 
 		return
@@ -107,7 +129,10 @@ func (rl *RateLimiter) handleHTTPResponse(req *APIRequest, resp *http.Response, 
 
 	if !isBadResponse(resp) && (req.Retries < rl.maxRetries || rl.maxRetries == -1) {
 		resp.Body.Close()
-		rl.releaseLimitersAfterDelay(regionLimiter, methodLimiter, 15*time.Second)
+		// Back off before the retry. Tokens stay held so the retry cannot
+		// exceed the bucket, and the later success or give-up releases them once.
+		timer := time.NewTimer(15 * time.Second)
+		<-timer.C
 
 		req.Retries++
 		go rl.handleRequest(req)
@@ -117,10 +142,10 @@ func (rl *RateLimiter) handleHTTPResponse(req *APIRequest, resp *http.Response, 
 	// Close the response body and send an error to the channel. Do not know how to handle this response
 	resp.Body.Close()
 	req.Error <- fmt.Errorf("received unexpected status code %d (%s)", resp.StatusCode, req.URL)
-	rl.releaseLimitersAfterDelay(regionLimiter, methodLimiter, 15*time.Second)
+	go releaseAllAfterDelay(15*time.Second, req.heldRegion, req.heldMethod)
 }
 
-func (rl *RateLimiter) handleRateLimitedResponse(resp *http.Response, regionLimiter *RateLimit, methodLimiter *RateLimit, retryRequest bool) {
+func (rl *RateLimiter) handleRateLimitedResponse(req *APIRequest, resp *http.Response, regionLimiter *RateLimit, methodLimiter *RateLimit, retryRequest bool) {
 	retryAfterHeader := resp.Header.Get("Retry-After")
 	rateLimitTypeHeader := resp.Header.Get("X-Rate-Limit-Type")
 	retryAfter, err := strconv.Atoi(retryAfterHeader)
@@ -131,15 +156,15 @@ func (rl *RateLimiter) handleRateLimitedResponse(resp *http.Response, regionLimi
 	retryAfterDuration := time.Duration(retryAfter) * time.Second
 
 	if rateLimitTypeHeader == "application" {
-		regionLimiter.blockedUntil = time.Now().Add(retryAfterDuration)
+		regionLimiter.blockFor(retryAfterDuration)
 	} else if rateLimitTypeHeader == "method" {
-		methodLimiter.blockedUntil = time.Now().Add(retryAfterDuration)
+		methodLimiter.blockFor(retryAfterDuration)
 	}
 
-	// If we are not going to retry the request, release the limiters
-	// We do this to maintain this retry request's place in the queue
+	// If we are not going to retry the request, release the limiters.
+	// A retry keeps its tokens so it stays in line without taking another.
 	if !retryRequest {
-		rl.releaseLimitersAfterDelay(regionLimiter, methodLimiter, retryAfterDuration)
+		go releaseAllAfterDelay(retryAfterDuration, req.heldRegion, req.heldMethod)
 	}
 }
 
@@ -148,81 +173,71 @@ func isBadResponse(resp *http.Response) bool {
 		resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusUnsupportedMediaType
 }
 
-func (rl *RateLimiter) updateRateLimits(resp *http.Response, methodID MethodID, regionLimiter *RateLimit, methodLimiter *RateLimit) {
-	appRateLimitHeader := resp.Header.Get("X-App-Rate-Limit")
-	appRateLimitCountHeader := resp.Header.Get("X-App-Rate-Limit-Count")
-	methodRateLimitHeader := resp.Header.Get("X-Method-Rate-Limit")
-	methodRateLimitCountHeader := resp.Header.Get("X-Method-Rate-Limit-Count")
+var (
+	logMissingApp      sync.Once
+	logMalformedApp    sync.Once
+	logMissingMethod   sync.Once
+	logMalformedMethod sync.Once
+)
 
-	if appRateLimitHeader != "" && appRateLimitCountHeader != "" {
-		shortLimitInfo, longLimitInfo := getShortAndLongLimits(appRateLimitHeader)
-		shortCountInfo, longCountInfo := getShortAndLongLimits(appRateLimitCountHeader)
-
-		rl.updateRateLimit(methodID, shortLimitInfo, shortCountInfo, regionLimiter.shortLimiter, &regionLimiter.blockedUntil, rl.conserveUsage.RegionPercent, true)
-		rl.updateRateLimit(methodID, longLimitInfo, longCountInfo, regionLimiter.longLimiter, &regionLimiter.blockedUntil, rl.conserveUsage.RegionPercent, true)
-	} else {
-		go regionLimiter.shortLimiter.ReleaseAfterDelay(15 * time.Second)
-		go regionLimiter.longLimiter.ReleaseAfterDelay(15 * time.Second)
-	}
-
-	if methodRateLimitHeader != "" && methodRateLimitCountHeader != "" {
-		rl.updateRateLimit(methodID, methodRateLimitHeader, methodRateLimitCountHeader, methodLimiter.shortLimiter, &methodLimiter.blockedUntil, rl.conserveUsage.MethodPercent, false)
-	} else {
-		go methodLimiter.shortLimiter.ReleaseAfterDelay(15 * time.Second)
-	}
+func (rl *RateLimiter) updateRateLimits(resp *http.Response, methodID MethodID, regionLimiter *RateLimit, methodLimiter *RateLimit, heldRegion, heldMethod []*limiter.Limiter) {
+	rl.syncLimitHeader(
+		"app",
+		resp.Header.Get("X-App-Rate-Limit"),
+		resp.Header.Get("X-App-Rate-Limit-Count"),
+		methodID,
+		true,
+		regionLimiter,
+		heldRegion,
+		&logMissingApp,
+		&logMalformedApp,
+	)
+	rl.syncLimitHeader(
+		"method",
+		resp.Header.Get("X-Method-Rate-Limit"),
+		resp.Header.Get("X-Method-Rate-Limit-Count"),
+		methodID,
+		false,
+		methodLimiter,
+		heldMethod,
+		&logMissingMethod,
+		&logMalformedMethod,
+	)
 }
 
-func getShortAndLongLimits(limitHeader string) (string, string) {
-	limits := strings.Split(limitHeader, ",")
-	return limits[0], limits[1]
-}
-
-func (rl *RateLimiter) updateRateLimit(methodID MethodID, limitInfo, countInfo string, limiterChannel *limiter.Limiter, blockedUntil *time.Time, conservePercent int, isRegionHeader bool) {
-	limitSplit := strings.Split(limitInfo, ":")
-	countSplit := strings.Split(countInfo, ":")
-
-	limit, errLimit := strconv.Atoi(limitSplit[0])
-	limitTimeout, errTimeout := strconv.Atoi(limitSplit[1])
-	count, errCount := strconv.Atoi(countSplit[0])
-
-	if errLimit != nil || errTimeout != nil || errCount != nil {
-		if limitTimeout == 0 {
-			limitTimeout = 60
-		}
-
-		go limiterChannel.ReleaseAfterDelay(time.Duration(limitTimeout) * time.Second)
+func (rl *RateLimiter) syncLimitHeader(kind, limitHeader, countHeader string, methodID MethodID, isRegion bool, limit *RateLimit, held []*limiter.Limiter, missingOnce, malformedOnce *sync.Once) {
+	// Missing headers release after 15s, malformed ones after 60s, until a valid
+	// header has set that bucket's window. A window learned earlier is reused.
+	if limitHeader == "" || countHeader == "" {
+		reportLimitHeader(missingOnce, kind, "missing", limitHeader+" "+countHeader)
+		limit.releaseHeld(held, missingHeaderDelay)
 		return
 	}
 
-	var limitWithConservation int = limit
+	buckets, err := parseLimitBuckets(limitHeader, countHeader)
+	if err != nil {
+		reportLimitHeader(malformedOnce, kind, "malformed", limitHeader)
+		limit.releaseHeld(held, malformedHeaderDelay)
+		return
+	}
 
-	var useConservation bool = false
-	if conservePercent > 0 {
-		useConservation = true
+	limit.applyHeader(buckets, rl.conservationPercent(methodID, isRegion))
+	limit.releaseHeld(held, malformedHeaderDelay)
+}
 
-		if !isRegionHeader {
-			for i := 0; i < len(rl.conserveUsage.IgnoreLimits); i++ {
-				if rl.conserveUsage.IgnoreLimits[i] == methodID {
-					useConservation = false
-					break
-				}
-			}
+func (rl *RateLimiter) conservationPercent(methodID MethodID, isRegion bool) int {
+	if isRegion {
+		return rl.conserveUsage.RegionPercent
+	}
+
+	percent := rl.conserveUsage.MethodPercent
+	if percent <= 0 {
+		return 0
+	}
+	for _, ignored := range rl.conserveUsage.IgnoreLimits {
+		if ignored == methodID {
+			return 0
 		}
 	}
-
-	if useConservation {
-		limitWithConservation = limit - (limit * conservePercent / 100)
-	} else {
-		limitWithConservation = limit
-	}
-
-	// If the limit has been reached, block the limiter channel until the limit resets
-	if count > limitWithConservation && time.Now().After(*blockedUntil) {
-		*blockedUntil = time.Now().Add(time.Duration(limitTimeout) * time.Second)
-	}
-
-	// Resize the limiter channel (if necessary) to the new limit
-	limiterChannel.SetCapacity(limitWithConservation)
-
-	go limiterChannel.ReleaseAfterDelay(time.Duration(limitTimeout) * time.Second)
+	return percent
 }
